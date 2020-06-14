@@ -1,0 +1,404 @@
+#include <LedControl.h>
+#include <SoftwareSerial.h>
+#define DIN 11
+#define CLK 9
+#define CS  10
+#define RXP 2
+#define TXP 1
+#define SCL 7
+#define SDA 6 
+
+SoftwareSerial mySerial(RXP,TXP); // RX, TX
+
+uint8_t data[32] = {0xFF,0x81,0x81,0x81,0x81,0x81,0x81,255,1,3,7,15,31,63,127,255,1,3,7,15,31,63,127,255,1,3,7,15,31,63,127,255};
+uint8_t nextdata[32];
+LedControl lc = LedControl(DIN,CLK,CS,4);
+uint8_t CurrentEffectState = 0;
+uint8_t SystemEffectMode = 1;
+bool EffectChangeRequest = false;
+uint8_t timecount = 0;
+
+const char Charactor[32][5] = {
+        {0x7E,0x81,0x81,0x81,0x7E},
+        {0x21,0x41,0xFF,0x01,0x01},
+        {0x43,0x85,0x89,0x91,0x61},
+        {0x42,0x91,0x91,0x91,0x6E},
+        {0x08,0x18,0x28,0x48,0xFF},
+        {0xF2,0x91,0x91,0x91,0x8E},
+        {0x7E,0x89,0x91,0x91,0x4E},
+        {0x80,0x80,0x8F,0x90,0xE0},
+        {0x6E,0x91,0x91,0x91,0x6E},
+        {0x72,0x89,0x89,0x89,0x7E},
+        {0x7E,0x81,0x81,0x81,0x42},
+        {0xFF,0x10,0x10,0x10,0x0F},
+        {0x1E,0x01,0x41,0x81,0x1E},
+        {0x0E,0x11,0x11,0x0A,0x00},
+        {0xFF,0x80,0x30,0x80,0xFF},
+        {0x1E,0x81,0x41,0x0E,0x18},        
+        {0x1F,0x08,0x10,0x0F,0x00},        
+        {0x32,0x49,0x49,0x49,0x3E},        
+        {0xFF,0x60,0x18,0x06,0xFF},        
+        {0x8E,0x51,0x51,0x9F,0x01},      
+        {0x0F,0x10,0x0F,0x10,0x0F},
+        {0x0E,0x11,0x51,0x96,0x18},
+        {0x00,0x2E,0x01,0x02,0x00},
+        {0x62,0x91,0x91,0x91,0x4E},
+        {0x0E,0x51,0x91,0x51,0x0F},
+        {0x10,0x3E,0x11,0x02,0x00},
+        {0x80,0x80,0xFF,0x80,0x80},
+        {0x1F,0x01,0x41,0x8E,0x18},
+        {0x1F,0x01,0xA1,0xC1,0x1E},
+        {0x00,0x08,0x08,0x08,0x00},
+        {0x00,0x00,0x00,0x00,0x00},
+        {0x60,0x90,0x90,0x60,0x00}
+};
+
+void setup() {
+    for(int index=0;index<lc.getDeviceCount();index++) {
+        lc.shutdown(index,false);
+        lc.setIntensity(index,4);
+    }
+      randomSeed(analogRead(1));
+      uint8_t ANYdata[5] = {2,0,29,7,8};
+      RenewData(ANYdata,5);
+      for(uint8_t i = 0; i<32 ; i++){
+        data[i] = nextdata[i];
+      }
+      DisplayData();
+      uint8_t ANY2data[] = {7,4,5,10};
+      RenewData(ANYdata,5);
+      DisplayData();
+      NextEffect();
+      Serial.begin(9600);
+      mySerial.begin(9600);
+      Serial.println("waiting");
+}
+
+void loop() {
+  SelectEffectMode();
+  DisplayData();
+  delay(5);
+  timecount++;
+}
+
+uint8_t Insert2data (uint8_t Position, uint8_t CharactorIndex){
+    uint8_t charactorsize = 5;
+    for (uint8_t i = 0; i < 5; i++){
+        if ((Charactor[CharactorIndex][0] == 0x00) && (i == 0)) charactorsize--; 
+        else if (Charactor[CharactorIndex][4] == 0 && i == 4){charactorsize--;}
+        else {
+            nextdata[Position + i + charactorsize - 5] = Charactor[CharactorIndex][i];
+        }
+    }
+    return Position + charactorsize;
+}
+
+void Resetdata(){
+    for (uint8_t i = 0; i < 32; i++) nextdata[i] = 0;
+}
+
+void RenewData(uint8_t KeyWordArray[], uint8_t Noc){
+    Resetdata();
+    uint8_t totalLen = 0;
+    for (uint8_t i = 0; i < Noc; i++){
+        totalLen = Insert2data(totalLen,KeyWordArray[i]) + 2;
+    }
+    totalLen -= 2;
+    if (totalLen < 32){
+        uint8_t startpoint = (32 - totalLen)/2;
+        
+        for (uint8_t i = 31; i > startpoint; i-- ){
+            nextdata[i] = nextdata[i-startpoint];
+        }
+        nextdata[startpoint] = nextdata[0];
+        for(uint8_t i = 0; i < startpoint; i++){
+            nextdata[i] = 0x00;
+        }
+    }
+}
+
+void ShiftData(uint8_t shiftbyte){
+    for(uint8_t i = 0 ; i < 31; i++){
+        data[i] = data[i+1];
+    }
+    data[31] = shiftbyte;
+}
+
+uint8_t shiftCharactor (uint8_t CharactorIndex, uint8_t CurrentEffectState){
+    if (Charactor[CharactorIndex][0] == 0){
+        ShiftData(Charactor[CharactorIndex][CurrentEffectState % 5]);
+        if (CurrentEffectState == 5) return 0;
+        return CurrentEffectState+1;
+    }
+    else{
+        if (CurrentEffectState % 6 == 0) ShiftData(0);
+        else ShiftData(Charactor[CharactorIndex][(CurrentEffectState-1) % 5 ]);
+        if (CurrentEffectState == 6) return 0;
+        return CurrentEffectState+1;
+    }
+}
+
+void DisplayData(){
+    uint8_t shipper = 0;
+    uint8_t row = 0;
+    for (uint8_t i = 0; i < 4; i++){
+        shipper = 0x80;
+        for (uint8_t j = 0; j < 8; j++){
+            row = 0x00;
+            if ((data[i*8 + 0] & shipper) != 0x00) {row = row | 128;}
+            if ((data[i*8 + 1] & shipper) != 0x00) {row = row | 64;}
+            if ((data[i*8 + 2] & shipper) != 0x00) {row = row | 32;}
+            if ((data[i*8 + 3] & shipper) != 0x00) {row = row | 16;}
+            if ((data[i*8 + 4] & shipper) != 0x00) {row = row | 8;}
+            if ((data[i*8 + 5] & shipper) != 0x00) {row = row | 4;}
+            if ((data[i*8 + 6] & shipper) != 0x00) {row = row | 2;}
+            if ((data[i*8 + 7] & shipper) != 0x00) {row = row | 1;}
+            lc.setRow(3-i,j, row);
+            shipper = shipper >> 1;
+        }
+    }
+}
+
+
+
+
+void RowTransition(){
+   uint8_t Collumn = 0x00;
+   if (CurrentEffectState < 9){
+        for(uint8_t i = 0; i < 32; i++){
+            if(i%2 == 0) Collumn = nextdata[i] >> (8 - CurrentEffectState);
+            else Collumn = nextdata[i] << (8 - CurrentEffectState);
+            data[i] = Collumn;
+        }
+    }
+    else if (CurrentEffectState == 30){
+        NextEffect();
+    }
+}
+
+void RowOut(){
+   uint8_t Collumn = 0x00;
+   if (CurrentEffectState < 9){
+        for(uint8_t i = 0; i < 32; i++){
+            if(i%2 == 0) Collumn = nextdata[i] >> CurrentEffectState;
+            else Collumn = nextdata[i] << CurrentEffectState;
+            data[i] = Collumn;
+        }
+    }
+    else if (CurrentEffectState == 30){
+        NextEffect();
+    }
+}
+
+void NonSynchronizeShift (){
+  
+    if(CurrentEffectState < 156){
+        uint8_t Cummulate = 0;
+        if (CurrentEffectState > 29) Cummulate = (CurrentEffectState - 28)/4;
+        for (uint8_t i = 31 - Cummulate ; i > 0; i--){
+            data[i] = data[i-1];
+        }
+        if (CurrentEffectState%5 == 0){
+            data[0] = nextdata[31 - CurrentEffectState/5];
+        }
+        else{
+            data[0] = 0;
+        }
+    }
+    else if (CurrentEffectState == 220){
+        NextEffect();
+    }   
+}
+
+void NonSynchronizeUnshift (){
+    if(CurrentEffectState < 200){
+        uint8_t Cummulate = CurrentEffectState/4 ;
+        // if (CurrentEffectState > 27) Cummulate = (CurrentEffectState - 28)/4;
+        if (CurrentEffectState%4 == 0 ){
+            if (Cummulate > 0 && Cummulate < 32){
+                data[Cummulate - 1] = nextdata[Cummulate];
+                data[Cummulate] = 0;
+            }
+        }
+        else{
+            if (Cummulate >= 0 && Cummulate < 32)
+                data[Cummulate] = 0;
+        }
+        if (Cummulate > 31) Cummulate = 31;
+        for (uint8_t i =0; i < Cummulate ; i++){
+            data[i] = data[i+1];
+        }
+    }    
+    else if (CurrentEffectState == 200){
+       NextEffect();
+    }
+    
+}
+
+void ScanTwice (){
+    if (CurrentEffectState < 32){
+        data[CurrentEffectState] = 0xFF;
+        data[31 - CurrentEffectState] = 0xFF;
+        if (CurrentEffectState > 0 && CurrentEffectState < 16){
+            data[CurrentEffectState-1] = nextdata[CurrentEffectState - 1] & 0xAA; 
+            data[32 - CurrentEffectState] = nextdata[32 - CurrentEffectState] & 0x55; 
+            data[CurrentEffectState] = 0xFF;
+            data[31 - CurrentEffectState] = 0xFF;
+        }
+        else if (CurrentEffectState > 15 && CurrentEffectState < 32){
+            data[CurrentEffectState] = nextdata[CurrentEffectState];
+            data[31-CurrentEffectState] = nextdata[31 -CurrentEffectState];
+            if ( CurrentEffectState < 31){
+                data[CurrentEffectState + 1] = 0xFF;
+                data[30 - CurrentEffectState] = 0xFF;
+            }
+        }
+    }
+    else if (CurrentEffectState == 50){
+        NextEffect();
+    }
+}
+
+void ReScanTwice (){
+    if (CurrentEffectState < 32){
+        data[CurrentEffectState] = 0xFF;
+        data[31 - CurrentEffectState] = 0xFF;
+        if (CurrentEffectState > 0 && CurrentEffectState < 16){
+            data[CurrentEffectState-1] = nextdata[CurrentEffectState - 1] & 0x55; 
+            data[32 - CurrentEffectState] = nextdata[32 - CurrentEffectState] & 0xAA; 
+            data[CurrentEffectState] = 0xFF;
+            data[31 - CurrentEffectState] = 0xFF;
+        }
+        else if (CurrentEffectState > 15 && CurrentEffectState < 32){
+            data[CurrentEffectState] = 0;
+            data[31-CurrentEffectState] = 0;
+            if(CurrentEffectState < 31){
+                data[CurrentEffectState + 1] = 0xFF;
+                data[30 - CurrentEffectState] = 0xFF;
+            }
+        }
+    }
+    if (CurrentEffectState == 35){
+        NextEffect();
+    }
+    
+}
+
+void FlyIn (){
+    if(CurrentEffectState < 60){
+        uint8_t Emax;
+        if (CurrentEffectState > 7) Emax = 8;
+        else Emax = CurrentEffectState;
+        for (uint8_t i = 0; i <= Emax; i++){
+            if (CurrentEffectState - i < 32){
+                data[CurrentEffectState - i] = nextdata[CurrentEffectState - i] << (7-i);
+            }
+        }
+    }
+    else {
+        NextEffect();
+    }
+}
+
+void FlyOut (){
+    if(CurrentEffectState < 60){
+        uint8_t Emax;
+        if (CurrentEffectState > 7) Emax = 8;
+        else Emax = CurrentEffectState;
+        for (uint8_t i = 0; i <= Emax; i++){
+            if (CurrentEffectState - i < 32){
+                data[CurrentEffectState - i] = nextdata[CurrentEffectState - i] >> i;
+            }
+        }
+    }
+    else{
+        NextEffect();
+    }
+}
+
+void RandomAppear(){
+    uint8_t Rmask;
+    if (CurrentEffectState == 0){
+        for(uint8_t i = 0; i < 32 ; i++){
+            Rmask = random();
+            data[i] = 0;
+        }
+    }
+    else if (CurrentEffectState < 6 ){
+        for(uint8_t i = 0; i < 32 ; i++){
+            Rmask = random();
+            data[i] = data[i]|(Rmask & nextdata[i]);
+        }
+    }
+    else if (CurrentEffectState == 6){
+         for(uint8_t i = 0; i < 32 ; i++) data[i] = nextdata[i];
+    }
+    else if (CurrentEffectState == 20){
+        NextEffect();
+    }
+}
+
+void RandomDisappear(){
+    uint8_t Rmask, EffectState;
+   
+    if (CurrentEffectState == 0)
+    for(uint8_t i = 0; i < 32 ; i++) data[i] = nextdata[i];
+    else if (CurrentEffectState < 6){
+        for(uint8_t i = 0; i < 32 ; i++){
+            Rmask = random(256);
+            data[i] = data[i]& Rmask;
+        }
+    }
+    else if (CurrentEffectState == 6){
+         for(uint8_t i = 0; i < 32 ; i++) data[i] = 0;
+    }
+    else if (CurrentEffectState == 10){
+        NextEffect();
+    }
+    
+}
+
+void SelectEffectMode(){
+    uint8_t DelayTime = 1;
+    EffectChangeRequest = false;
+        switch (SystemEffectMode){
+            case 0: RowTransition(); break;
+            case 1: RowOut(); break;
+            case 2: NonSynchronizeShift();  break;
+            case 3: NonSynchronizeUnshift(); break;
+            case 4: ScanTwice(); break;
+            case 5: ReScanTwice(); break;
+            case 6: FlyIn(); break;
+            case 7: FlyOut(); break;
+            case 8: RandomAppear(); break;
+            case 9: RandomDisappear(); break;
+            case 10: ShiftData(10); break;
+        }
+    
+    if (EffectChangeRequest == false) CurrentEffectState++;
+ 
+}
+
+void NextEffect(){
+    CurrentEffectState = 0;
+    if (SystemEffectMode % 2 == 0){
+        SystemEffectMode++;
+    }
+    else{
+        if (mySerial.available()){
+            String Response = mySerial.readString();
+            SystemEffectMode = Response[0]-48;
+            Serial.println("Next effect is sent by app");
+            Serial.println(SystemEffectMode);
+        }
+        else{
+            SystemEffectMode = random(55);
+            SystemEffectMode = SystemEffectMode%5;
+            SystemEffectMode = SystemEffectMode*2;
+            Serial.println("Next effect is randomize");
+            Serial.println(SystemEffectMode);
+        }
+
+    }
+    EffectChangeRequest = true;
+}
